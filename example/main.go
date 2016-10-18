@@ -34,7 +34,7 @@ func main() {
 	s := rfb.NewServer(width, height)
 	go func() {
 		err = s.Serve(ln)
-		log.Fatalf("rfb server ended with: %v", err)
+		log.Fatalf("rfb server failed with: %v", err)
 	}()
 	for c := range s.Conns {
 		handleConn(c)
