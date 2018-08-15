@@ -555,6 +555,8 @@ func inRange(v uint32, max uint16) uint32 {
 	switch max {
 	case 0x1f: // 5 bits
 		return v >> (16 - 5)
+	case 0x03: // 2 bits
+		return v >> (16 - 2)
 	}
 	panic("todo; max value = " + strconv.Itoa(int(max)))
 }
