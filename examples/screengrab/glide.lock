@@ -1,0 +1,16 @@
+hash: cdb8d766a38c4c785e4b66fdefa4e9c84349bcf295ec0581c5080270ba32e23e
+updated: 2018-08-15T13:39:54.424687+02:00
+imports:
+- name: github.com/BurntSushi/xgb
+  version: 27f122750802c950b2c869a5b63dafcf590ced95
+  subpackages:
+  - xinerama
+  - xproto
+- name: github.com/kbinani/screenshot
+  version: 038e1adccf8662638cbd78d0b29f97a5283c7a61
+  subpackages:
+  - internal/util
+  - internal/xwindow
+- name: github.com/lxn/win
+  version: 7e1250ba2e7749fb9eb865da9ee93fb5a2fe73f1
+testImports: []

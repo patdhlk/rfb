@@ -1,0 +1,5 @@
+package: github.com/mreithub/rfb/examples/screengrab
+ignore:
+- github.com/patdhlk/rfb
+import:
+- package: github.com/kbinani/screenshot
