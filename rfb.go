@@ -563,12 +563,11 @@ func compareImages(oldImg image.Image, newImg image.Image) []image.Rectangle {
 
 		for y := sectionTop; y < bounds.Max.Y; y++ { // row by row
 			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				var sectionLeft = x - (x % sectionSize)
+				if _, exists := changedSections[sectionLeft]; exists {
+					continue
+				}
 				if oldImg.At(x, y) != newImg.At(x, y) {
-					var sectionLeft = x - (x % sectionSize)
-					if _, ok := changedSections[sectionLeft]; ok {
-						continue
-					}
-
 					// add changed section to rc
 					var sectionRight = minInt(sectionLeft+sectionSize, bounds.Max.X)
 					var sectionBottom = minInt(sectionTop+sectionSize, bounds.Max.Y)
