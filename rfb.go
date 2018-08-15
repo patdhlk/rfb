@@ -285,45 +285,38 @@ func (c *Conn) pushFramesLoop() {
 				return
 			}
 			c.pushFrame(ur)
-		case li := <-c.feed:
-			c.mu.Lock()
-			c.last = li
-			c.mu.Unlock()
-			c.pushImage(li)
 		}
 	}
 }
 
 func (c *Conn) pushFrame(ur FrameBufferUpdateRequest) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	li := c.last
+	li := <-c.feed
 	if li == nil {
 		return
 	}
 
-	if ur.incremental() {
-		li.Lock()
-		defer li.Unlock()
-		im := li.Img
-		b := im.Bounds()
-		width, height := b.Dx(), b.Dy()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
-		//log.Printf("Client wants incremental update, sending none. %#v", ur)
-		c.w(uint8(cmdFramebufferUpdate))
-		c.w(uint8(0))      // padding byte
-		c.w(uint16(1))     // no rectangles
-		c.w(uint16(0))     // x
-		c.w(uint16(0))     // y
-		c.w(uint16(width)) // x
-		c.w(uint16(height))
-		c.w(int32(encodingCopyRect))
-		c.w(uint16(0)) // src-x
-		c.w(uint16(0)) // src-y
-		c.flush()
-		return
-	}
 	c.pushImage(li)
+}
+
+func (c *Conn) pushEmptyFrame() {
+	width, height := c.dimensions()
+
+	log.Printf("Nothing's changed, sending empty FrameBufferUpdate")
+	c.w(uint8(cmdFramebufferUpdate))
+	c.w(uint8(0))      // padding byte
+	c.w(uint16(1))     // no rectangles
+	c.w(uint16(0))     // x
+	c.w(uint16(0))     // y
+	c.w(uint16(width)) // x
+	c.w(uint16(height))
+	c.w(int32(encodingCopyRect))
+	c.w(uint16(0)) // src-x
+	c.w(uint16(0)) // src-y
+	c.flush()
+	return
 }
 
 func (c *Conn) pushImage(li *LockableImage) {
@@ -362,6 +355,8 @@ func (c *Conn) pushImage(li *LockableImage) {
 		c.pushGenericLocked(im)
 	}
 	c.flush()
+
+	c.last = li
 }
 
 func (c *Conn) pushRGBAScreensThousandsLocked(im *image.RGBA) {
@@ -496,9 +491,7 @@ func (r *FrameBufferUpdateRequest) incremental() bool { return r.IncrementalFlag
 // 6.4.3
 func (c *Conn) handleUpdateRequest() {
 	if !c.gotFirstFrame {
-		li := <-c.feed
 		c.mu.Lock()
-		c.last = li
 		c.mu.Unlock()
 		c.gotFirstFrame = true
 		go c.pushFramesLoop()
