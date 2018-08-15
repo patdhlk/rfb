@@ -301,24 +301,6 @@ func (c *Conn) pushFrame(ur FrameBufferUpdateRequest) {
 	c.pushImage(li, ur)
 }
 
-func (c *Conn) pushEmptyFrame() {
-	width, height := c.dimensions()
-
-	log.Printf("Nothing's changed, sending empty FrameBufferUpdate")
-	c.w(uint8(cmdFramebufferUpdate))
-	c.w(uint8(0))      // padding byte
-	c.w(uint16(1))     // no rectangles
-	c.w(uint16(0))     // x
-	c.w(uint16(0))     // y
-	c.w(uint16(width)) // x
-	c.w(uint16(height))
-	c.w(int32(encodingCopyRect))
-	c.w(uint16(0)) // src-x
-	c.w(uint16(0)) // src-y
-	c.flush()
-	return
-}
-
 func (c *Conn) pushImage(li *LockableImage, ur FrameBufferUpdateRequest) {
 	li.Lock()
 	defer li.Unlock()
