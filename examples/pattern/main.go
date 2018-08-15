@@ -56,13 +56,14 @@ func handleConn(c *rfb.Conn) {
 		defer log.Printf("stopping profiling CPU")
 	}
 
-	im := image.NewRGBA(image.Rect(0, 0, width, height))
-	li := &rfb.LockableImage{Img: im}
+	// we need two different images here so the rfb library can compare two consecutive frames (and only send changed sections)
+	li := &rfb.LockableImage{Img: image.NewRGBA(image.Rect(0, 0, width, height))}
+	li2 := &rfb.LockableImage{Img: image.NewRGBA(image.Rect(0, 0, width, height))}
 
 	closec := make(chan bool)
 	go func() {
 		slide := 0
-		tick := time.NewTicker(time.Second / 30)
+		tick := time.NewTicker(time.Second / 2000)
 		defer tick.Stop()
 		haveNewFrame := false
 		for {
@@ -74,12 +75,16 @@ func handleConn(c *rfb.Conn) {
 			select {
 			case feed <- li:
 				haveNewFrame = false
+				// swap frames
+				var tmp = li
+				li = li2
+				li2 = tmp
 			case <-closec:
 				return
 			case <-tick.C:
 				slide++
 				li.Lock()
-				drawImage(im, slide)
+				drawImage(li.Img.(*image.RGBA), slide)
 				li.Unlock()
 				haveNewFrame = true
 			}
