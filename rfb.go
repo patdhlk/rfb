@@ -21,8 +21,8 @@ const (
 	statusOK     = 0
 	statusFailed = 1
 
-	encodingRaw      = 0
-	encodingCopyRect = 1
+	encodingRaw = 0
+	//encodingCopyRect = 1
 
 	// Client -> Server
 	cmdSetPixelFormat           = 0
