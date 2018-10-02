@@ -4,23 +4,18 @@ import (
 	"flag"
 	"image"
 	"log"
-	"math"
 	"net"
 	"os"
 	"runtime/pprof"
 	"time"
 
+	"github.com/kbinani/screenshot"
 	"github.com/patdhlk/rfb"
 )
 
 var (
-	bindAddress = flag.String("bindAddress", ":5900", "listen on [ip]:port")
+	bindAddress = flag.String("bindAddress", "localhost:5900", "listen on [ip]:port")
 	profile     = flag.Bool("profile", false, "write a cpu.prof file when client disconnects")
-)
-
-const (
-	width  = 1280
-	height = 720
 )
 
 func main() {
@@ -31,7 +26,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	s := rfb.NewServer(width, height)
+	if screens := screenshot.NumActiveDisplays(); screens < 1 {
+		log.Fatal("no screens found!")
+	} else if screens > 1 {
+		log.Print("warning: more than one screen, only casting the first")
+	}
+
+	var rect = screenshot.GetDisplayBounds(0)
+	s := rfb.NewServer(rect.Size().X, rect.Size().Y)
 	go func() {
 		err = s.Serve(ln)
 		log.Fatalf("rfb server failed with: %v", err)
@@ -56,15 +58,18 @@ func handleConn(c *rfb.Conn) {
 		defer log.Printf("stopping profiling CPU")
 	}
 
-	im := image.NewRGBA(image.Rect(0, 0, width, height))
+	var rect = screenshot.GetDisplayBounds(0)
+	log.Println("screen size: ", rect.Size().X, "x", rect.Size().Y)
+	im := image.NewRGBA(rect)
 	li := &rfb.LockableImage{Img: im}
 
 	closec := make(chan bool)
 	go func() {
-		slide := 0
 		tick := time.NewTicker(time.Second / 30)
 		defer tick.Stop()
 		haveNewFrame := false
+
+		//var ts = time.Now()
 		for {
 			feed := c.Feed
 			if !haveNewFrame {
@@ -77,44 +82,36 @@ func handleConn(c *rfb.Conn) {
 			case <-closec:
 				return
 			case <-tick.C:
-				slide++
 				li.Lock()
-				drawImage(im, slide)
+				//var img *image.RGBA
+				var err error
+				var img *image.RGBA
+				if img, err = screenshot.CaptureDisplay(0); err != nil {
+					log.Fatal(err)
+				}
+
+				//var now = time.Now()
+				li.Img = img
 				li.Unlock()
 				haveNewFrame = true
+				//log.Printf("dbg: %dms", now.Sub(ts)/time.Millisecond)
+				//ts = now
 			}
 		}
 	}()
 
 	for e := range c.Event {
-		log.Printf("got event: %#v", e)
+		switch e.(type) {
+		case rfb.KeyEvent:
+			var ke = e.(rfb.KeyEvent)
+			log.Printf("got key event: %#v", ke)
+		case rfb.PointerEvent:
+			var me = e.(rfb.PointerEvent)
+			log.Printf("got pointer event: %#v", me)
+		default:
+			log.Printf("got unsupported event: %#v", e)
+		}
 	}
 	close(closec)
 	log.Printf("Client disconnected")
-}
-
-func drawImage(im *image.RGBA, anim int) {
-	pos := 0
-	const border = 50
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			var r, g, b uint8
-			switch {
-			case x < border*2.5 && x < int((1.1+math.Sin(float64(y+anim*2)/40))*border):
-				r = 255
-			case x > width-border*2.5 && x > width-int((1.1+math.Sin(math.Pi+float64(y+anim*2)/40))*border):
-				g = 255
-			case y < border*2.5 && y < int((1.1+math.Sin(float64(x+anim*2)/40))*border):
-				r, g = 255, 255
-			case y > height-border*2.5 && y > height-int((1.1+math.Sin(math.Pi+float64(x+anim*2)/40))*border):
-				b = 255
-			default:
-				r, g, b = uint8(x+anim), uint8(y+anim), uint8(x+y+anim*3)
-			}
-			im.Pix[pos] = r
-			im.Pix[pos+1] = g
-			im.Pix[pos+2] = b
-			pos += 4 // skipping alpha
-		}
-	}
 }

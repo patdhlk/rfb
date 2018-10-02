@@ -21,8 +21,8 @@ const (
 	statusOK     = 0
 	statusFailed = 1
 
-	encodingRaw      = 0
-	encodingCopyRect = 1
+	encodingRaw = 0
+	//encodingCopyRect = 1
 
 	// Client -> Server
 	cmdSetPixelFormat           = 0
@@ -112,8 +112,8 @@ type Conn struct {
 	format PixelFormat
 
 	feed chan *LockableImage
-	mu   sync.RWMutex // guards last (but not its pixels, just the variable)
-	last *LockableImage
+	mu   sync.RWMutex // guards last
+	last image.Image  // pointer to read only image (the last we've sent to the client)
 
 	buf8 []uint8 // temporary buffer to avoid generating garbage
 
@@ -285,83 +285,66 @@ func (c *Conn) pushFramesLoop() {
 				return
 			}
 			c.pushFrame(ur)
-		case li := <-c.feed:
-			c.mu.Lock()
-			c.last = li
-			c.mu.Unlock()
-			c.pushImage(li)
 		}
 	}
 }
 
 func (c *Conn) pushFrame(ur FrameBufferUpdateRequest) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	li := c.last
+	li := <-c.feed
 	if li == nil {
 		return
 	}
 
-	if ur.incremental() {
-		li.Lock()
-		defer li.Unlock()
-		im := li.Img
-		b := im.Bounds()
-		width, height := b.Dx(), b.Dy()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-		//log.Printf("Client wants incremental update, sending none. %#v", ur)
-		c.w(uint8(cmdFramebufferUpdate))
-		c.w(uint8(0))      // padding byte
-		c.w(uint16(1))     // no rectangles
-		c.w(uint16(0))     // x
-		c.w(uint16(0))     // y
-		c.w(uint16(width)) // x
-		c.w(uint16(height))
-		c.w(int32(encodingCopyRect))
-		c.w(uint16(0)) // src-x
-		c.w(uint16(0)) // src-y
-		c.flush()
-		return
-	}
-	c.pushImage(li)
+	c.pushImage(li, ur)
 }
 
-func (c *Conn) pushImage(li *LockableImage) {
+func (c *Conn) pushImage(li *LockableImage, ur FrameBufferUpdateRequest) {
 	li.Lock()
 	defer li.Unlock()
 
-	im := li.Img
-	b := im.Bounds()
-	if b.Min.X != 0 || b.Min.Y != 0 {
-		panic("this code is lazy and assumes images with Min bounds at 0,0")
+	var lastImg = c.last
+
+	var rects []image.Rectangle
+	if ur.incremental() {
+		rects = compareImages(li.Img, lastImg)
+	} else {
+		rects = append(rects, li.Img.Bounds())
 	}
-	width, height := b.Dx(), b.Dy()
 
 	c.w(uint8(cmdFramebufferUpdate))
-	c.w(uint8(0))  // padding byte
-	c.w(uint16(1)) // 1 rectangle
+	c.w(uint8(0))           // padding byte
+	c.w(uint16(len(rects))) // number of rectangles
 
-	//log.Printf("sending %d x %d pixels", width, height)
+	//log.Printf("sending %d changed sections", len(rects))
 
 	if c.format.TrueColour == 0 {
 		c.failf("only true-colour supported")
 	}
 
-	// Send that rectangle:
-	c.w(uint16(0))     // x
-	c.w(uint16(0))     // y
-	c.w(uint16(width)) // x
-	c.w(uint16(height))
-	c.w(int32(encodingRaw))
+	// Send rectangles:
+	for _, rect := range rects {
+		c.w(uint16(rect.Min.X)) // x
+		c.w(uint16(rect.Min.Y)) // y
+		c.w(uint16(rect.Dx()))  // width
+		c.w(uint16(rect.Dy()))  // height
+		c.w(int32(encodingRaw))
 
-	rgba, isRGBA := im.(*image.RGBA)
-	if isRGBA && c.format.isScreensThousands() {
-		// Fast path.
-		c.pushRGBAScreensThousandsLocked(rgba)
-	} else {
-		c.pushGenericLocked(im)
+		// note: this doesn't work right now (pushRGBAScreensThousandsLocked() directly accesses the pixel buffer, ignoring the SubImage() boundaries)
+		/*rgba, isRGBA := li.Img.(*image.RGBA)
+		if isRGBA && c.format.isScreensThousands() {
+			// Fast path.
+			rgba = rgba.SubImage(rect).(*image.RGBA)
+			c.pushRGBAScreensThousandsLocked(rgba)
+		} else {*/
+		c.pushGenericLocked(li.Img, rect)
+		//}
 	}
 	c.flush()
+
+	c.last = li.Img
 }
 
 func (c *Conn) pushRGBAScreensThousandsLocked(im *image.RGBA) {
@@ -398,11 +381,9 @@ func (c *Conn) pushRGBAScreensThousandsLocked(im *image.RGBA) {
 // pushGenericLocked is the slow path generic implementation that works on
 // any image.Image concrete type and any client-requested pixel format.
 // If you're lucky, you never end in this path.
-func (c *Conn) pushGenericLocked(im image.Image) {
-	b := im.Bounds()
-	width, height := b.Dx(), b.Dy()
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+func (c *Conn) pushGenericLocked(im image.Image, rect image.Rectangle) {
+	for y := rect.Min.Y; y < rect.Max.Y; y++ {
+		for x := rect.Min.X; x < rect.Max.X; x++ {
 			col := im.At(x, y)
 			r16, g16, b16, _ := col.RGBA()
 			r16 = inRange(r16, c.format.RedMax)
@@ -496,10 +477,6 @@ func (r *FrameBufferUpdateRequest) incremental() bool { return r.IncrementalFlag
 // 6.4.3
 func (c *Conn) handleUpdateRequest() {
 	if !c.gotFirstFrame {
-		li := <-c.feed
-		c.mu.Lock()
-		c.last = li
-		c.mu.Unlock()
 		c.gotFirstFrame = true
 		go c.pushFramesLoop()
 	}
@@ -551,10 +528,65 @@ func (c *Conn) handlePointerEvent() {
 	}
 }
 
+// compareImages -- chops the images in 64x64 squares and returns a list of changed sections
+//
+// note: this will only work if the application sends us references to different Image objects
+// each time
+func compareImages(oldImg image.Image, newImg image.Image) []image.Rectangle {
+	var rc []image.Rectangle
+
+	// prechecks
+	if oldImg == nil && newImg == nil {
+		panic("can't compare two nil images")
+	} else if oldImg == nil {
+		// first frame -> everything's changed
+		rc = append(rc, newImg.Bounds())
+		return rc
+	} else if newImg == nil {
+		// by pushing a nil image, the app code's telling us there have been no changes -> return empty list
+		return []image.Rectangle{}
+	} else if newImg.Bounds() != oldImg.Bounds() {
+		panic("images have different sizes")
+	}
+
+	var minInt = func(a, b int) int { // helper function
+		if a < b {
+			return a
+		}
+		return b
+	}
+
+	const sectionSize = 64
+	bounds := newImg.Bounds()
+	for sectionTop := bounds.Min.Y; sectionTop < bounds.Max.Y; sectionTop += sectionSize {
+		var changedSections = map[int]struct{}{} // x coordinates (sectionLeft) of the sections already in rc
+
+		for y := sectionTop; y < bounds.Max.Y; y++ { // row by row
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				var sectionLeft = x - (x % sectionSize)
+				if _, exists := changedSections[sectionLeft]; exists {
+					continue
+				}
+				if oldImg.At(x, y) != newImg.At(x, y) {
+					// add changed section to rc
+					var sectionRight = minInt(sectionLeft+sectionSize, bounds.Max.X)
+					var sectionBottom = minInt(sectionTop+sectionSize, bounds.Max.Y)
+					rc = append(rc, image.Rect(sectionLeft, sectionTop, sectionRight, sectionBottom))
+					changedSections[sectionLeft] = struct{}{}
+				}
+			}
+		}
+	}
+
+	return rc
+}
+
 func inRange(v uint32, max uint16) uint32 {
 	switch max {
 	case 0x1f: // 5 bits
 		return v >> (16 - 5)
+	case 0x03: // 2 bits
+		return v >> (16 - 2)
 	}
 	panic("todo; max value = " + strconv.Itoa(int(max)))
 }
